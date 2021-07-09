@@ -39,8 +39,8 @@ Tip: To easily modify parameters across all 16 retuned tracks, shift-click to se
 
 This application is being developed and tested on MacOS Catalina with Logic Pro 10.6. It
 depends on the following packages:
-* wxpython
-* mido
-* python-rtmidi
-* pycairo
+* [wxpython](https://wxpython.org/)
+* [mido](https://mido.readthedocs.io/en/latest/)
+* [python-rtmidi](https://pypi.org/project/python-rtmidi/)
+* [pycairo](https://www.cairographics.org/pycairo/)
 
