@@ -5,7 +5,7 @@
 
 import mido
 import time
-from math import floor
+from math import floor, log2
 from threading import Thread
 import wx
 import re
@@ -32,45 +32,25 @@ class ResultEvent(wx.PyEvent):
         self.data = data
 
 # Thread class that executes processing
-class WorkerThread(Thread):
-    # 24-tet
-    cents = [
-        0, 50, 100, 150,
-        200, 250, 300, 350,
-        400, 450, 500, 550,
-        600, 650, 700, 750,
-        800, 850, 900, 950,
-        1000, 1050, 1100, 1150
-    ]
+class RetunerThread(Thread):
 
-    num_degrees = 24
-    midi_range_lo = 0
-    midi_range_hi = 127
-    midi_start_tonic = 60
-    midi_ref = 69
-    ref_freq = 440.0
-    cycle_cent = 1200
-    map_size = 24
-    kbm_map = [
-        0,  1,  2,  3,  4,  5,  6,  7,
-        8,  9, 10, 11, 12, 13, 14, 15,
-        16, 17, 18, 19, 20, 21, 22, 23
-    ]
+    scl = None
+    kbm = None
 
+    # Pitch bend range, cents
     pbr = 200
 
     note2channel = [{} for i in range(128)]
     speaking = [False] * 16
 
 
-    """Worker Thread Class."""
     def __init__(self, notify_window):
 
         # Match Scala .scl ratio and cent values
         # cents may be floats or ints
-        reRatio = re.compile(r'(\d+)\/(\d+)')
-        reFloat = re.compile(r'([-+]?\d+\.\d*)')
-        reInt   = re.compile(r'\d+')
+        self.reRatio = re.compile(r'(\d+)\/(\d+)')
+        self.reFloat = re.compile(r'([-+]?\d+\.\d*)')
+        self.reInt   = re.compile(r'\d+')
 
         Thread.__init__(self)
         self._notify_window = notify_window
@@ -80,12 +60,16 @@ class WorkerThread(Thread):
         self.start()
 
     def run(self):
+        self.scl = self.load_scl('24edo.scl')
+        self.kbm = self.load_kbm('24edo.kbm')
+        print(self.scl)
+        print(self.kbm)
+
         self.process_messages(self)
         wx.PostEvent(self._notify_window, ResultEvent(None))
         return
 
     def abort(self):
-        """abort worker thread."""
         # Method for use by main thread to signal an abort
         self._want_abort = 1
 
@@ -103,11 +87,16 @@ class WorkerThread(Thread):
                 for message in qs8.iter_pending():
                     if message.type == 'note_off':
                         note_out, bend_out = self.retune(message.note)
+                        if note_out is None:
+                            print('unmapped note off')
+                            # Unmapped note
+                            continue
+
                         message.note = note_out
                         ch = self.note2channel[note_out][bend_out]
                         message.channel = ch
                         self.speaking[ch] = False
-                        # Bends still-sounding note release
+                        # Don't un-bend note-off events.  The note's decay is still sounding.
                         # bend = mido.Message('pitchwheel', channel=ch, pitch=0)
                         # logic.send(bend)
                         logic.send(message)
@@ -121,6 +110,11 @@ class WorkerThread(Thread):
                            continue
 
                         note_out, bend_out = self.retune(message.note)
+                        if note_out is None:
+                            print('unmapped note_on')
+                            # Unmapped note
+                            continue
+
                         message.note = note_out
 
                         looking = True
@@ -176,25 +170,26 @@ class WorkerThread(Thread):
 
 
     def retune(self, note_in):
-        # "octaves" (cycles) relative to midi_start_tonic
-        map_cycles = floor((note_in - self.midi_start_tonic) / self.map_size)
+        # "octaves" (scale cycles) relative to kbm['start']
+        map_cycles = floor((note_in - self.kbm['start']) / self.kbm['size'])
 
         # midi_in tonic for this cycle
-        self.midi_map_tonic = self.midi_start_tonic + map_cycles*12
-        kbm_index = (note_in - self.midi_start_tonic) % self.map_size
-        cent_index = self.kbm_map[kbm_index]
+        mapped_tonic = self.kbm['start'] + map_cycles*12
+        kbm_index = (note_in - self.kbm['start']) % self.kbm['size']
+        cent_index = self.kbm['degrees'][kbm_index]
 
-        # TODO:  if cent_index = -1, don't emit the note
-        cent = self.cents[cent_index]
-        note_out = self.midi_map_tonic + floor(cent/100)
-        cent_bend = cent - 100*(note_out - self.midi_map_tonic)
+        if cent_index < 0:
+            return (None, None)
+
+        cent = self.scl['cents'][cent_index]
+        note_out = mapped_tonic + floor(cent/100)
+        cent_bend = cent - 100*(note_out - mapped_tonic)
         # TODO:  Add controller pitch bend
         # TODO:  Add ref_freq compensation
-        # MIDI: pitch bend range = (0, 16383), with 8192 = no bend
         # mido: pitch bend range = (-8192, 8191), with 0 = no bend
         bend_out = round(cent_bend*8192/self.pbr)
 
-        # print(f'note_in:{note_in} note_out:{note_out} bend_out:{bend_out} map_cycles:{map_cycles} midi_map_tonic:{self.midi_map_tonic} kbm_index:{kbm_index} cent_index:{cent_index} cent:{cent} cent_bend:{cent_bend}')
+        # print(f'note_in:{note_in} note_out:{note_out} bend_out:{bend_out} map_cycles:{map_cycles} midi_map_tonic:{mapped_tonic} kbm_index:{kbm_index} cent_index:{cent_index} cent:{cent} cent_bend:{cent_bend}')
 
         if bend_out > 8191:
             print(f'oops {bend_out} -> 8191')
@@ -206,7 +201,7 @@ class WorkerThread(Thread):
 
         return (note_out, bend_out)
 
-    def load_scl(filename):
+    def load_scl(self, filename):
         """
         Read a Scala .scl file as defined here:
         http://www.huygens-fokker.org/scala/scl_format.html
@@ -263,7 +258,7 @@ class WorkerThread(Thread):
             'cents': cents,
             }
 
-    def load_kbm(filename):
+    def load_kbm(self, filename):
         """
         Read a Scala ..kbm file as defined here:
         http://www.huygens-fokker.org/scala/help.htm#mappings
@@ -390,7 +385,7 @@ class WorkerThread(Thread):
 
 
 
-    def read_uint(line):
+    def read_uint(self, line):
         """
         Convert the string 'line' to a positive integer.
         Return None upon error.
@@ -406,7 +401,7 @@ class WorkerThread(Thread):
         return i
 
 
-    def read_float(line):
+    def read_float(self, line):
         """
         Convert the string 'line' to a positive float.
         Return None upon error.
@@ -422,7 +417,7 @@ class WorkerThread(Thread):
         return f
 
 
-    def read_degree(line):
+    def read_degree(self, line):
         """
         Convert the string 'line' from a Scala .kbm file
         to an integer scale degree.  An 'x' gets mapped to -1,
@@ -434,13 +429,11 @@ class WorkerThread(Thread):
         return self.read_uint(line)
 
 
-    def read_cents(line):
+    def read_cents(self, line):
         """ 
-        'line' is a string representation of either a ratio or float.
-        Convert it to a float.
-        Convert ratios to cents by multiplying by 600:
-         1200 cents = one octave (ratio = 2)
-         cents = ratio * 1200/2
+        'line' is a string representation of a musical interval,
+        either as a float (cents), or a ratio.
+        Convert ratios to cents: 1200*log2(ratio)
 
         Return None upon error.
         """
@@ -450,7 +443,7 @@ class WorkerThread(Thread):
         m = self.reRatio.match(line)
         if m:
             try:
-                return 600.0*int(m.group(1))/int(m.group(2))
+                return 1200.0*log2(int(m.group(1))/int(m.group(2)))
             except:
                 return None
 
@@ -462,7 +455,7 @@ class WorkerThread(Thread):
 
 
 
-# GUI Frame class that spins off the worker thread
+# GUI Frame class that spins off the retuner thread
 class MainFrame(wx.Frame):
     """Class MainFrame."""
     def __init__(self, parent, id):
@@ -487,14 +480,14 @@ class MainFrame(wx.Frame):
         """Start Computation."""
         # Trigger the worker thread unless it's already busy
         if not self.worker:
-            self.status.SetLabel('Starting computation')
-            self.worker = WorkerThread(self)
+            self.status.SetLabel('Starting retuner')
+            self.worker = RetunerThread(self)
 
     def OnStop(self, event):
         """Stop Computation."""
         # Flag the worker thread to stop if running
         if self.worker:
-            self.status.SetLabel('Trying to abort computation')
+            self.status.SetLabel('Trying to abort retuner')
             self.worker.abort()
 
     def OnResult(self, event):
