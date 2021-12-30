@@ -1,0 +1,38 @@
+! Size of map
+22
+! 1st MIDI note number to retune
+0
+! Last MIDI note number to retune
+127
+! Middle note where the 1st entry of the mapping is mapped
+60
+!Reference note for which the frequency is given
+69
+! Floaint point frequency to tune the above note to
+440.0
+! Scale degree to consider as formal octave (ignore for octaveless, like Bohlen-Pierce?)
+22
+! Mapping, 'x' = unmapped, may map same pitch to multiple notes
+! 0..size-1
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21

@@ -1,7 +1,9 @@
 # pycrotuner
 MIDI microtuner - Live MIDI input transformer for microtonal performance and composition
 
-Note: This project is not yet ready for release or contributions.
+# - Discontinued -
+This project is discontinued.  A new JavaScript version will allow all of this
+to run live in a browser without installing any software.
 
 Pycrotuner is a graphical application for performing and composing microtonal music. It
 reads [Scala](http://huygens-fokker.org/scala) .scl and .kbm files to
